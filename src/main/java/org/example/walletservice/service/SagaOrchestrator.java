@@ -12,6 +12,7 @@ import org.example.walletservice.repository.SagaStepExecutionRepository;
 import org.example.walletservice.repository.TransactionIntentRepository;
 import org.example.walletservice.util.SnowflakeIdGenerator;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,9 @@ import java.time.Instant;
 @Slf4j
 @Service
 public class SagaOrchestrator {
+
+    private static final int MAX_RETRIES = 3;
+    private static final long BASE_DELAY_MS = 200;
 
     private final WalletOperationService walletOps;
     private final SagaInstanceRepository sagaInstanceRepository;
@@ -84,7 +88,8 @@ public class SagaOrchestrator {
         sagaInstanceRepository.updateStatus(sagaId, SagaStatus.RUNNING, 1, null);
         var debitStep = createStep(sagaId, 0, "DEBIT_SOURCE", "FORWARD", intent.getInitiatedBy());
         try {
-            walletOps.debit(intent.getSourceWalletId(), intent.getAmount(), sagaId, "DEBIT_SOURCE");
+            executeWithRetry(() -> walletOps.debit(intent.getSourceWalletId(), intent.getAmount(), sagaId, "DEBIT_SOURCE"),
+                    "DEBIT_SOURCE", sagaId);
             sagaStepRepository.updateStatus(debitStep.getId(), StepStatus.COMPLETED, null, null);
             log.info("SAGA sagaId={} step=1 DEBIT_SOURCE COMPLETED", sagaId);
         } catch (Exception e) {
@@ -100,7 +105,8 @@ public class SagaOrchestrator {
         sagaInstanceRepository.updateStatus(sagaId, SagaStatus.RUNNING, 2, null);
         var creditStep = createStep(sagaId, 1, "CREDIT_DEST", "FORWARD", intent.getInitiatedBy());
         try {
-            walletOps.credit(intent.getDestWalletId(), intent.getAmount(), sagaId, "CREDIT_DEST");
+            executeWithRetry(() -> walletOps.credit(intent.getDestWalletId(), intent.getAmount(), sagaId, "CREDIT_DEST"),
+                    "CREDIT_DEST", sagaId);
             sagaStepRepository.updateStatus(creditStep.getId(), StepStatus.COMPLETED, null, null);
             sagaInstanceRepository.updateStatus(sagaId, SagaStatus.COMPLETED, 2, null);
             intentRepository.updateStatus(intent.getIntentId(), IntentStatus.COMPLETED, sagaId, null);
@@ -119,7 +125,8 @@ public class SagaOrchestrator {
         log.warn("COMPENSATING sagaId={} DEBIT_SOURCE walletId={}", sagaId, walletId);
         var compStep = createStep(sagaId, 0, "DEBIT_SOURCE", "COMPENSATE", initiatedBy);
         try {
-            walletOps.credit(walletId, amount, sagaId, "DEBIT_SOURCE_COMPENSATE");
+            executeWithRetry(() -> walletOps.credit(walletId, amount, sagaId, "DEBIT_SOURCE_COMPENSATE"),
+                    "DEBIT_SOURCE_COMPENSATE", sagaId);
             sagaStepRepository.updateStatus(compStep.getId(), StepStatus.COMPENSATED, null, null);
             sagaInstanceRepository.updateStatus(sagaId, SagaStatus.COMPENSATED, 2, null);
             log.info("COMPENSATION complete sagaId={}", sagaId);
@@ -127,6 +134,34 @@ public class SagaOrchestrator {
             log.error("COMPENSATION FAILED sagaId={} → POISON: {}", sagaId, e.getMessage());
             sagaStepRepository.updateStatus(compStep.getId(), StepStatus.FAILED, null, e.getMessage());
             sagaInstanceRepository.updateStatus(sagaId, SagaStatus.POISON, 0, "Compensation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Retries only on transient failures (DataAccessException).
+     * Business errors (IllegalStateException, IllegalArgumentException) fail immediately.
+     */
+    private void executeWithRetry(Runnable operation, String stepName, long sagaId) {
+        int attempt = 0;
+        while (true) {
+            try {
+                operation.run();
+                return;
+            } catch (DataAccessException e) {
+                attempt++;
+                if (attempt >= MAX_RETRIES) {
+                    log.error("SAGA sagaId={} step={} exhausted {} retries: {}", sagaId, stepName, MAX_RETRIES, e.getMessage());
+                    throw e;
+                }
+                long delay = BASE_DELAY_MS * (1L << (attempt - 1)); // exponential: 200, 400, 800...
+                log.warn("SAGA sagaId={} step={} retry {}/{} after {}ms: {}", sagaId, stepName, attempt, MAX_RETRIES, delay, e.getMessage());
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Retry interrupted", ie);
+                }
+            }
         }
     }
 
