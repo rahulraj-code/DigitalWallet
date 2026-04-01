@@ -1,22 +1,64 @@
-# infra/docker/docker-compose.ymp
-version: '3.8'
 services:
-  postgres:
-    image: postgres:15
-    container_name: wallet-postgres
+  pg-shard-0:
+    image: postgres:16
+    container_name: wallet-shard-0
     environment:
-      POSTGRES_DB : wallet_db
-      POSTGRES_USER: rahulnrp
-      POSTGRES_PASSWORD:
+      POSTGRES_DB: wallet_shard_0
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet123
     ports:
-      - "5432"
+      - "5433:5432"
     volumes:
-      - wallet_data:/var/lib/postgresql/data
+      - ./init-schema.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rahulnrp -d wallet_db"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet_shard_0"]
+      interval: 5s
       retries: 5
 
-volumes:
-  wallet_data:
+  pg-shard-1:
+    image: postgres:16
+    container_name: wallet-shard-1
+    environment:
+      POSTGRES_DB: wallet_shard_1
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet123
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./init-schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet_shard_1"]
+      interval: 5s
+      retries: 5
+
+  pg-shard-2:
+    image: postgres:16
+    container_name: wallet-shard-2
+    environment:
+      POSTGRES_DB: wallet_shard_2
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet123
+    ports:
+      - "5435:5432"
+    volumes:
+      - ./init-schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet_shard_2"]
+      interval: 5s
+      retries: 5
+
+  shardingsphere-proxy:
+    image: apache/shardingsphere-proxy:5.5.2
+    container_name: wallet-proxy
+    ports:
+      - "3307:3307"
+    volumes:
+      - ../shardingSphere/server.yaml:/opt/shardingsphere-proxy/conf/server.yaml
+      - ../shardingSphere/config-sharding.yaml:/opt/shardingsphere-proxy/conf/config-sharding.yaml
+    depends_on:
+      pg-shard-0:
+        condition: service_healthy
+      pg-shard-1:
+        condition: service_healthy
+      pg-shard-2:
+        condition: service_healthy

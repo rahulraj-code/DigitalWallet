@@ -1,0 +1,76 @@
+databaseName: wallet_db
+
+dataSources:
+  ds_0:
+    url: jdbc:postgresql://pg-shard-0:5432/wallet_shard_0
+    username: wallet
+    password: wallet123
+    connectionTimeoutMilliseconds: 30000
+    idleTimeoutMilliseconds: 60000
+    maxLifetimeMilliseconds: 1800000
+    maxPoolSize: 10
+    minPoolSize: 1
+  ds_1:
+    url: jdbc:postgresql://pg-shard-1:5432/wallet_shard_1
+    username: wallet
+    password: wallet123
+    connectionTimeoutMilliseconds: 30000
+    idleTimeoutMilliseconds: 60000
+    maxLifetimeMilliseconds: 1800000
+    maxPoolSize: 10
+    minPoolSize: 1
+  ds_2:
+    url: jdbc:postgresql://pg-shard-2:5432/wallet_shard_2
+    username: wallet
+    password: wallet123
+    connectionTimeoutMilliseconds: 30000
+    idleTimeoutMilliseconds: 60000
+    maxLifetimeMilliseconds: 1800000
+    maxPoolSize: 10
+    minPoolSize: 1
+
+rules:
+  - !SHARDING
+    tables:
+      account:
+        actualDataNodes: ds_${0..2}.account
+        tableStrategy:
+          standard:
+            shardingColumn: id
+            shardingAlgorithmName: account_hash_mod
+      wallet:
+        actualDataNodes: ds_${0..2}.wallet
+        tableStrategy:
+          standard:
+            shardingColumn: account_id
+            shardingAlgorithmName: account_hash_mod
+      transaction:
+        actualDataNodes: ds_${0..2}.transaction
+        tableStrategy:
+          standard:
+            shardingColumn: account_id
+            shardingAlgorithmName: account_hash_mod
+      saga_instance:
+        actualDataNodes: ds_${0..2}.saga_instance
+        tableStrategy:
+          standard:
+            shardingColumn: initiated_by
+            shardingAlgorithmName: account_hash_mod
+      saga_step_execution:
+        actualDataNodes: ds_${0..2}.saga_step_execution
+        tableStrategy:
+          standard:
+            shardingColumn: initiated_by
+            shardingAlgorithmName: account_hash_mod
+      transaction_intent:
+        actualDataNodes: ds_${0..2}.transaction_intent
+        tableStrategy:
+          standard:
+            shardingColumn: initiated_by
+            shardingAlgorithmName: account_hash_mod
+
+    shardingAlgorithms:
+      account_hash_mod:
+        type: HASH_MOD
+        props:
+          sharding-count: 3

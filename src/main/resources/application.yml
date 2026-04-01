@@ -6,16 +6,14 @@ spring:
     name: WalletService
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/wallet_db
-    username: rahulnrp
-    password:
+    url: jdbc:postgresql://localhost:3307/wallet_db
+    username: root
+    password: root
     driver-class-name: org.postgresql.Driver
 
   sql:
     init:
-      mode: always
-      continue-on-error: true
-      schema-locations: classpath:schema.sql
+      mode: never
 
 logging:
   level:
