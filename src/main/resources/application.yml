@@ -1,0 +1,18 @@
+app:
+  instance-id: ${random.uuid}
+
+spring:
+  application:
+    name: WalletService
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/wallet_db
+    username: rahulnrp
+    password:
+    driver-class-name: org.postgresql.Driver
+
+  sql:
+    init:
+      mode: always
+      continue-on-error: true
+      schema-locations: classpath:schema.sql

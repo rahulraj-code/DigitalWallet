@@ -1,0 +1,22 @@
+# infra/docker/docker-compose.ymp
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    container_name: wallet-postgres
+    environment:
+      POSTGRES_DB : wallet_db
+      POSTGRES_USER: rahulnrp
+      POSTGRES_PASSWORD:
+    ports:
+      - "5432"
+    volumes:
+      - wallet_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rahulnrp -d wallet_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  wallet_data:
