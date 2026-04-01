@@ -86,3 +86,20 @@ CREATE TABLE IF NOT EXISTS saga_step_execution (
     UNIQUE (saga_id, step_index, step_type)
 );
 CREATE INDEX IF NOT EXISTS idx_saga_step_saga_id ON saga_step_execution(saga_id);
+
+-- Transaction Intent (idempotency + async tracking)
+CREATE TYPE intent_status AS ENUM ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'COMPENSATED');
+
+CREATE TABLE IF NOT EXISTS transaction_intent (
+    intent_id        VARCHAR(128) PRIMARY KEY,
+    source_wallet_id BIGINT       NOT NULL,
+    dest_wallet_id   BIGINT       NOT NULL,
+    amount           DECIMAL(20,8) NOT NULL CHECK (amount > 0),
+    initiated_by     VARCHAR(64)  NOT NULL,
+    status           intent_status NOT NULL DEFAULT 'PENDING',
+    saga_id          BIGINT,
+    error_message    TEXT,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_intent_initiated_by ON transaction_intent(initiated_by);

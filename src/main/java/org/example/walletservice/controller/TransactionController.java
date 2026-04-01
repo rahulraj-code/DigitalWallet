@@ -1,8 +1,9 @@
 package org.example.walletservice.controller;
 
 import org.example.walletservice.dto.TransferRequest;
-import org.example.walletservice.models.SagaInstance;
 import org.example.walletservice.models.Transaction;
+import org.example.walletservice.models.TransactionIntent;
+import org.example.walletservice.repository.TransactionIntentRepository;
 import org.example.walletservice.service.SagaOrchestrator;
 import org.example.walletservice.service.TransactionService;
 import org.springframework.http.ResponseEntity;
@@ -14,27 +15,40 @@ import java.util.List;
 @RequestMapping("/api/transactions")
 public class TransactionController {
 
-    private final TransactionService transactionService;
     private final SagaOrchestrator sagaOrchestrator;
+    private final TransactionService transactionService;
+    private final TransactionIntentRepository intentRepository;
 
-    public TransactionController(TransactionService transactionService, SagaOrchestrator sagaOrchestrator) {
-        this.transactionService = transactionService;
+    public TransactionController(SagaOrchestrator sagaOrchestrator,
+                                 TransactionService transactionService,
+                                 TransactionIntentRepository intentRepository) {
         this.sagaOrchestrator = sagaOrchestrator;
-    }
-
-    @GetMapping("/saga/{sagaId}")
-    public ResponseEntity<List<Transaction>> getTransactionsBySagaId(@PathVariable Long sagaId) {
-        return ResponseEntity.ok(transactionService.getTransactionsBySagaId(sagaId));
-    }
-
-    @GetMapping("/wallet/{walletId}")
-    public ResponseEntity<List<Transaction>> getTransactionsByWalletId(@PathVariable Long walletId) {
-        return ResponseEntity.ok(transactionService.getTransactionsByWalletId(walletId));
+        this.transactionService = transactionService;
+        this.intentRepository = intentRepository;
     }
 
     @PostMapping("/transfer")
-    public ResponseEntity<SagaInstance> transfer(@RequestBody TransferRequest request) {
-        return ResponseEntity.ok(sagaOrchestrator.transfer(
-                request.sourceWalletId(), request.destWalletId(), request.amount(), request.initiatedBy()));
+    public ResponseEntity<TransactionIntent> transfer(@RequestBody TransferRequest req) {
+        var intent = sagaOrchestrator.createIntent(
+                req.sourceWalletId(), req.destWalletId(), req.amount(), req.initiatedBy());
+        sagaOrchestrator.executeTransfer(intent);
+        return ResponseEntity.accepted().body(intent);
+    }
+
+    @GetMapping("/transfer/{intentId}/status")
+    public ResponseEntity<TransactionIntent> getTransferStatus(@PathVariable String intentId) {
+        return intentRepository.findById(intentId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/wallet/{walletId}")
+    public ResponseEntity<List<Transaction>> getByWalletId(@PathVariable Long walletId) {
+        return ResponseEntity.ok(transactionService.getTransactionsByWalletId(walletId));
+    }
+
+    @GetMapping("/saga/{sagaId}")
+    public ResponseEntity<List<Transaction>> getBySagaId(@PathVariable Long sagaId) {
+        return ResponseEntity.ok(transactionService.getTransactionsBySagaId(sagaId));
     }
 }

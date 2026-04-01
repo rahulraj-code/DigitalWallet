@@ -2,12 +2,16 @@ package org.example.walletservice.service;
 
 import org.example.walletservice.models.SagaInstance;
 import org.example.walletservice.models.SagaStepExecution;
+import org.example.walletservice.models.TransactionIntent;
+import org.example.walletservice.models.enums.IntentStatus;
 import org.example.walletservice.models.enums.SagaStatus;
 import org.example.walletservice.models.enums.StepStatus;
 import org.example.walletservice.repository.SagaInstanceRepository;
 import org.example.walletservice.repository.SagaStepExecutionRepository;
+import org.example.walletservice.repository.TransactionIntentRepository;
 import org.example.walletservice.util.SnowflakeIdGenerator;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -19,26 +23,44 @@ public class SagaOrchestrator {
     private final WalletOperationService walletOps;
     private final SagaInstanceRepository sagaInstanceRepository;
     private final SagaStepExecutionRepository sagaStepRepository;
+    private final TransactionIntentRepository intentRepository;
     private final SnowflakeIdGenerator idGenerator;
     private final String instanceId;
 
     public SagaOrchestrator(WalletOperationService walletOps,
                             SagaInstanceRepository sagaInstanceRepository,
                             SagaStepExecutionRepository sagaStepRepository,
+                            TransactionIntentRepository intentRepository,
                             SnowflakeIdGenerator idGenerator,
                             @Value("${app.instance-id}") String instanceId) {
         this.walletOps = walletOps;
         this.sagaInstanceRepository = sagaInstanceRepository;
         this.sagaStepRepository = sagaStepRepository;
+        this.intentRepository = intentRepository;
         this.idGenerator = idGenerator;
         this.instanceId = instanceId;
     }
 
-    public SagaInstance transfer(Long sourceWalletId, Long destWalletId, BigDecimal amount, String initiatedBy) {
+    public TransactionIntent createIntent(Long sourceWalletId, Long destWalletId,
+                                          BigDecimal amount, String initiatedBy) {
+        TransactionIntent intent = TransactionIntent.builder()
+                .intentId(String.valueOf(idGenerator.nextId()))
+                .sourceWalletId(sourceWalletId)
+                .destWalletId(destWalletId)
+                .amount(amount)
+                .initiatedBy(initiatedBy)
+                .build();
+        intentRepository.save(intent);
+        return intent;
+    }
+
+    @Async
+    public void executeTransfer(TransactionIntent intent) {
         long sagaId = idGenerator.nextId();
         String payload = """
-            {"sourceWalletId":%d,"destWalletId":%d,"amount":"%s"}
-            """.formatted(sourceWalletId, destWalletId, amount.toPlainString()).trim();
+            {"intentId":"%s","sourceWalletId":%d,"destWalletId":%d,"amount":"%s"}
+            """.formatted(intent.getIntentId(), intent.getSourceWalletId(),
+                intent.getDestWalletId(), intent.getAmount().toPlainString()).trim();
 
         SagaInstance saga = SagaInstance.builder()
                 .id(sagaId)
@@ -46,37 +68,40 @@ public class SagaOrchestrator {
                 .totalSteps(2)
                 .payload(payload)
                 .ownerInstanceId(instanceId)
-                .initiatedBy(initiatedBy)
+                .initiatedBy(intent.getInitiatedBy())
                 .expiresAt(Instant.now().plusSeconds(300))
                 .build();
         sagaInstanceRepository.save(saga);
+        intentRepository.updateStatus(intent.getIntentId(), IntentStatus.PROCESSING, sagaId, null);
 
         // Step 1: Debit source
         sagaInstanceRepository.updateStatus(sagaId, SagaStatus.RUNNING, 1, null);
-        SagaStepExecution debitStep = createStep(sagaId, 0, "DEBIT_SOURCE", "FORWARD", initiatedBy);
+        SagaStepExecution debitStep = createStep(sagaId, 0, "DEBIT_SOURCE", "FORWARD", intent.getInitiatedBy());
         try {
-            walletOps.debit(sourceWalletId, amount, sagaId, "DEBIT_SOURCE");
+            walletOps.debit(intent.getSourceWalletId(), intent.getAmount(), sagaId, "DEBIT_SOURCE");
             sagaStepRepository.updateStatus(debitStep.getId(), StepStatus.COMPLETED, null, null);
         } catch (Exception e) {
             sagaStepRepository.updateStatus(debitStep.getId(), StepStatus.FAILED, null, e.getMessage());
             sagaInstanceRepository.updateStatus(sagaId, SagaStatus.FAILED, 1, e.getMessage());
-            return sagaInstanceRepository.findById(sagaId).orElseThrow();
+            intentRepository.updateStatus(intent.getIntentId(), IntentStatus.FAILED, sagaId, e.getMessage());
+            return;
         }
 
         // Step 2: Credit destination
         sagaInstanceRepository.updateStatus(sagaId, SagaStatus.RUNNING, 2, null);
-        SagaStepExecution creditStep = createStep(sagaId, 1, "CREDIT_DEST", "FORWARD", initiatedBy);
+        SagaStepExecution creditStep = createStep(sagaId, 1, "CREDIT_DEST", "FORWARD", intent.getInitiatedBy());
         try {
-            walletOps.credit(destWalletId, amount, sagaId, "CREDIT_DEST");
+            walletOps.credit(intent.getDestWalletId(), intent.getAmount(), sagaId, "CREDIT_DEST");
             sagaStepRepository.updateStatus(creditStep.getId(), StepStatus.COMPLETED, null, null);
             sagaInstanceRepository.updateStatus(sagaId, SagaStatus.COMPLETED, 2, null);
+            intentRepository.updateStatus(intent.getIntentId(), IntentStatus.COMPLETED, sagaId, null);
         } catch (Exception e) {
             sagaStepRepository.updateStatus(creditStep.getId(), StepStatus.FAILED, null, e.getMessage());
-            compensateDebit(sourceWalletId, amount, sagaId, initiatedBy);
-            sagaInstanceRepository.updateStatus(sagaId, SagaStatus.COMPENSATED, 2, e.getMessage());
+            compensateDebit(intent.getSourceWalletId(), intent.getAmount(), sagaId, intent.getInitiatedBy());
+            SagaInstance finalSaga = sagaInstanceRepository.findById(sagaId).orElseThrow();
+            IntentStatus intentStatus = finalSaga.getStatus() == SagaStatus.POISON ? IntentStatus.FAILED : IntentStatus.COMPENSATED;
+            intentRepository.updateStatus(intent.getIntentId(), intentStatus, sagaId, e.getMessage());
         }
-
-        return sagaInstanceRepository.findById(sagaId).orElseThrow();
     }
 
     private void compensateDebit(Long walletId, BigDecimal amount, long sagaId, String initiatedBy) {
@@ -84,6 +109,7 @@ public class SagaOrchestrator {
         try {
             walletOps.credit(walletId, amount, sagaId, "DEBIT_SOURCE_COMPENSATE");
             sagaStepRepository.updateStatus(compStep.getId(), StepStatus.COMPENSATED, null, null);
+            sagaInstanceRepository.updateStatus(sagaId, SagaStatus.COMPENSATED, 2, null);
         } catch (Exception e) {
             sagaStepRepository.updateStatus(compStep.getId(), StepStatus.FAILED, null, e.getMessage());
             sagaInstanceRepository.updateStatus(sagaId, SagaStatus.POISON, 0, "Compensation failed: " + e.getMessage());
