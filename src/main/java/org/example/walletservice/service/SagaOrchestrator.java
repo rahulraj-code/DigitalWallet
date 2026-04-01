@@ -64,6 +64,22 @@ public class SagaOrchestrator {
     @Async
     public void executeTransfer(TransactionIntent intent) {
         long sagaId = idGenerator.nextId();
+        try {
+            doExecuteTransfer(intent, sagaId);
+        } catch (Exception e) {
+            log.error("SAGA sagaId={} interrupted/unexpected: {}", sagaId, e.getMessage());
+
+            try{
+                sagaInstanceRepository.updateStatus(sagaId,SagaStatus.FAILED, 0, e.getMessage());
+            }
+            catch ( Exception ignored){
+                log.warn("could not update SAGA status - SAGA instane may not exist");
+            }
+            intentRepository.updateStatus(intent.getIntentId(), IntentStatus.FAILED, null, e.getMessage());
+        }
+    }
+
+    private void doExecuteTransfer(TransactionIntent intent, long sagaId) {
         log.info("Starting SAGA sagaId={} intentId={}", sagaId, intent.getIntentId());
 
         String payload = """
