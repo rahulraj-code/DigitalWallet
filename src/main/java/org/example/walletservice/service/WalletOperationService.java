@@ -1,5 +1,6 @@
 package org.example.walletservice.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.example.walletservice.models.Transaction;
 import org.example.walletservice.models.Wallet;
 import org.example.walletservice.models.enums.TransactionType;
@@ -11,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
+@Slf4j
 @Service
 public class WalletOperationService {
 
@@ -28,12 +30,15 @@ public class WalletOperationService {
 
     @Transactional
     public void debit(Long walletId, BigDecimal amount, long sagaId, String stepName) {
+        log.info("DEBIT walletId={} amount={} sagaId={} step={}", walletId, amount, sagaId, stepName);
         Wallet wallet = walletRepository.findByIdForUpdate(walletId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found: " + walletId));
         if (wallet.getBalance().compareTo(amount) < 0) {
+            log.warn("Insufficient balance walletId={} balance={} requested={}", walletId, wallet.getBalance(), amount);
             throw new IllegalStateException("Insufficient balance");
         }
-        walletRepository.updateBalance(walletId, wallet.getBalance().subtract(amount));
+        BigDecimal newBalance = wallet.getBalance().subtract(amount);
+        walletRepository.updateBalance(walletId, newBalance);
         transactionRepository.save(Transaction.builder()
                 .transactionId(idGenerator.nextId())
                 .type(TransactionType.DEBIT)
@@ -43,13 +48,16 @@ public class WalletOperationService {
                 .sagaId(sagaId)
                 .idempotencyKey(sagaId + ":" + stepName + ":FORWARD")
                 .build());
+        log.info("DEBIT complete walletId={} newBalance={}", walletId, newBalance);
     }
 
     @Transactional
     public void credit(Long walletId, BigDecimal amount, long sagaId, String stepName) {
+        log.info("CREDIT walletId={} amount={} sagaId={} step={}", walletId, amount, sagaId, stepName);
         Wallet wallet = walletRepository.findByIdForUpdate(walletId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found: " + walletId));
-        walletRepository.updateBalance(walletId, wallet.getBalance().add(amount));
+        BigDecimal newBalance = wallet.getBalance().add(amount);
+        walletRepository.updateBalance(walletId, newBalance);
         transactionRepository.save(Transaction.builder()
                 .transactionId(idGenerator.nextId())
                 .type(TransactionType.CREDIT)
@@ -59,5 +67,6 @@ public class WalletOperationService {
                 .sagaId(sagaId)
                 .idempotencyKey(sagaId + ":" + stepName + ":FORWARD")
                 .build());
+        log.info("CREDIT complete walletId={} newBalance={}", walletId, newBalance);
     }
 }

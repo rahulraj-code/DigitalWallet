@@ -33,7 +33,7 @@ public class TransactionIntentRepository {
     }
 
     public void save(TransactionIntent intent) {
-        var now = Instant.now();
+        Instant now = Instant.now();
         intent.setCreatedAt(now);
         intent.setUpdatedAt(now);
         jdbc.update("""

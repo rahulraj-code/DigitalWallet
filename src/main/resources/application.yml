@@ -16,3 +16,8 @@ spring:
       mode: always
       continue-on-error: true
       schema-locations: classpath:schema.sql
+
+logging:
+  level:
+    org.example.walletservice: DEBUG
+    org.springframework.jdbc.core: DEBUG

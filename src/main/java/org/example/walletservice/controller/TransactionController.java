@@ -29,7 +29,7 @@ public class TransactionController {
 
     @PostMapping("/transfer")
     public ResponseEntity<TransactionIntent> transfer(@RequestBody TransferRequest req) {
-        var intent = sagaOrchestrator.createIntent(
+        TransactionIntent intent = sagaOrchestrator.createIntent(
                 req.sourceWalletId(), req.destWalletId(), req.amount(), req.initiatedBy());
         sagaOrchestrator.executeTransfer(intent);
         return ResponseEntity.accepted().body(intent);
