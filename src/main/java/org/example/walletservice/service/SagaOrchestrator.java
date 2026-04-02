@@ -13,6 +13,7 @@ import org.example.walletservice.repository.TransactionIntentRepository;
 import org.example.walletservice.util.SnowflakeIdGenerator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -47,18 +48,27 @@ public class SagaOrchestrator {
         this.instanceId = instanceId;
     }
 
-    public TransactionIntent createIntent(Long sourceWalletId, Long destWalletId,
+    /**
+     * Creates a new intent or returns the existing one if a duplicate idempotencyKey is provided.
+     * Returns null if the intent already exists (duplicate request).
+     */
+    public TransactionIntent createIntent(String idempotencyKey, Long sourceWalletId, Long destWalletId,
                                           BigDecimal amount, String initiatedBy) {
         var intent = TransactionIntent.builder()
-                .intentId(String.valueOf(idGenerator.nextId()))
+                .intentId(idempotencyKey)
                 .sourceWalletId(sourceWalletId)
                 .destWalletId(destWalletId)
                 .amount(amount)
                 .initiatedBy(initiatedBy)
                 .build();
-        intentRepository.save(intent);
-        log.info("Intent created intentId={} source={} dest={} amount={}", intent.getIntentId(), sourceWalletId, destWalletId, amount);
-        return intent;
+        try {
+            intentRepository.save(intent);
+            log.info("Intent created intentId={} source={} dest={} amount={}", idempotencyKey, sourceWalletId, destWalletId, amount);
+            return intent;
+        } catch (DuplicateKeyException e) {
+            log.info("Duplicate intent intentId={}, returning existing", idempotencyKey);
+            return null;
+        }
     }
 
     @Async

@@ -30,7 +30,13 @@ public class TransactionController {
     @PostMapping("/transfer")
     public ResponseEntity<TransactionIntent> transfer(@RequestBody TransferRequest req) {
         TransactionIntent intent = sagaOrchestrator.createIntent(
-                req.sourceWalletId(), req.destWalletId(), req.amount(), req.initiatedBy());
+                req.idempotencyKey(), req.sourceWalletId(), req.destWalletId(), req.amount(), req.initiatedBy());
+        if (intent == null) {
+            // Duplicate — return the existing intent
+            return intentRepository.findById(req.idempotencyKey())
+                    .map(existing -> ResponseEntity.ok(existing))
+                    .orElse(ResponseEntity.notFound().build());
+        }
         sagaOrchestrator.executeTransfer(intent);
         return ResponseEntity.accepted().body(intent);
     }
